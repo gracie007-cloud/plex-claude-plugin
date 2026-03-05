@@ -6,9 +6,9 @@ build-backend = "hatchling.build"
 packages = ["server"]
 
 [project]
-name = "plex-claude-plugin"
+name = "videodrome-plugin"
 version = "0.1.0"
-description = "Claude MCP plugin for Plex Media Server administration"
+description = "Claude MCP plugin for video management with Plex, TMDb, and Transmission integration"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -22,6 +22,10 @@ dependencies = [
     "tmdbsimple>=2.9.0",
     "aiosqlite>=0.20.0",
     "watchdog>=4.0.0",
+    "transmission-rpc>=7.0.0",
+    "torrent-search-mcp>=1.1.0", # Torrent search across multiple providers
+    "crawl4ai>=0.8.0", # Required by torrent-search-mcp (>=0.8.0 for CVE fix)
+    "curl-cffi>=0.7.0", # TLS/HTTP2 fingerprint spoofing — fast first-pass scraper
 ]
 
 [project.optional-dependencies]
@@ -31,9 +35,14 @@ dev = [
     "pytest-mock>=3.12",
     "aioresponses>=0.7",
 ]
+stealth = [
+    # Deep anti-detection via Patchright (Chromium patched at source level).
+    # After installing: python -m patchright install --with-deps chromium
+    "patchright>=1.50.0",
+]
 
 [project.scripts]
-plex-mcp = "server.main:main"
+videodrome = "server.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

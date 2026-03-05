@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 from server.files import FileManager, FileOperationError, InvalidExtensionError, PathRestrictionError
 from server.history import IngestHistory, IngestStatus, IngestRecord
+from server.tools import nas as nas_tools
 
 
 class IngestTools:
@@ -49,6 +50,14 @@ class IngestTools:
         """Close history database connection."""
         await self.history.close()
 
+    async def _ensure_auto_mount(self, path: Union[str, Path]) -> None:
+        """Attempt NAS auto-mount when enabled and path is on the configured volume."""
+        mount_result = await nas_tools.ensure_media_volume_for_path(path)
+        if mount_result.get("attempted") and not mount_result.get("success", False):
+            raise FileOperationError(
+                f"Auto-mount failed for {path}: {mount_result.get('error', 'unknown error')}"
+            )
+
     async def list_ingest_files(
         self,
         recursive: bool = False
@@ -62,6 +71,7 @@ class IngestTools:
             Dictionary with success status and list of file paths
         """
         try:
+            await self._ensure_auto_mount(self.file_manager.ingest_dir)
             files = self.file_manager.list_files(
                 self.file_manager.ingest_dir,
                 recursive=recursive
@@ -117,6 +127,9 @@ class IngestTools:
         )
 
         try:
+            await self._ensure_auto_mount(source)
+            await self._ensure_auto_mount(dest)
+
             # Perform file operation
             if operation == "copy":
                 result_path = self.file_manager.copy_file(source, dest)
@@ -413,57 +426,106 @@ class IngestTools:
 
 
 # Convenience functions for MCP tool handler registration
+# These accept the raw file_manager and history objects that main.py holds,
+# matching the calling convention in main.py.
 
-async def list_ingest_files(tools: IngestTools, recursive: bool = False):
+async def list_ingest_files(file_manager, recursive: bool = False):
     """MCP tool handler for list_ingest_files."""
-    return await tools.list_ingest_files(recursive=recursive)
+    try:
+        files = file_manager.list_files(file_manager.ingest_dir, recursive=recursive)
+        return {"success": True, "files": [str(f) for f in files], "count": len(files)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 async def ingest_file(
-    tools: IngestTools,
+    file_manager,
+    history,
     source_path: str,
     destination_path: str,
     tmdb_id: Optional[int] = None,
     media_type: Optional[str] = None,
     confidence: Optional[float] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    operation: str = "move"
+    operation: str = "copy"
 ):
     """MCP tool handler for ingest_file."""
-    return await tools.ingest_file(
-        source_path=source_path,
-        destination_path=destination_path,
+    source = Path(source_path)
+    dest = Path(destination_path)
+    record_id = await history.add_record(
+        source_path=source,
+        destination_path=dest,
+        status=IngestStatus.PENDING,
         tmdb_id=tmdb_id,
         media_type=media_type,
         confidence=confidence,
-        metadata=metadata,
-        operation=operation
+        metadata=metadata
     )
+    try:
+        if operation == "move":
+            result_path = file_manager.move_file(source, dest)
+        else:
+            result_path = file_manager.copy_file(source, dest)
+        await history.update_record(record_id, status=IngestStatus.SUCCESS)
+        return {"success": True, "destination": str(result_path), "record_id": record_id}
+    except (InvalidExtensionError, PathRestrictionError, FileOperationError) as e:
+        await history.update_record(record_id, status=IngestStatus.FAILED, error_message=str(e))
+        return {"success": False, "error": str(e), "record_id": record_id}
+    except Exception as e:
+        await history.update_record(record_id, status=IngestStatus.FAILED, error_message=str(e))
+        return {"success": False, "error": str(e), "record_id": record_id}
 
 
 async def get_ingest_history(
-    tools: IngestTools,
+    history,
     status: Optional[str] = None,
     tmdb_id: Optional[int] = None,
     media_type: Optional[str] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = 50
 ):
     """MCP tool handler for get_ingest_history."""
-    return await tools.get_ingest_history(
-        status=status,
+    status_enum = None
+    if status:
+        try:
+            status_enum = IngestStatus(status.upper())
+        except ValueError:
+            pass
+    records = await history.query_records(
+        status=status_enum,
         tmdb_id=tmdb_id,
-        media_type=media_type,
-        limit=limit
+        media_type=media_type
     )
+    if limit:
+        records = records[:limit]
+    return [
+        {
+            "id": r.id,
+            "source_path": r.source_path,
+            "destination_path": r.destination_path,
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "tmdb_id": r.tmdb_id,
+            "media_type": r.media_type,
+            "confidence": r.confidence,
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+        }
+        for r in records
+    ]
 
 
 async def check_duplicate(
-    tools: IngestTools,
+    history,
     tmdb_id: Optional[int] = None,
     source_path: Optional[str] = None
 ):
     """MCP tool handler for check_duplicate."""
-    return await tools.check_duplicate(
-        tmdb_id=tmdb_id,
-        source_path=source_path
-    )
+    is_dup = await history.is_duplicate(tmdb_id=tmdb_id, source_path=source_path)
+    return {"is_duplicate": is_dup, "tmdb_id": tmdb_id, "source_path": source_path}
+
+
+async def get_ingest_statistics(history):
+    """MCP tool handler for get_ingest_statistics."""
+    try:
+        stats = await history.get_statistics()
+        return {"success": True, **stats}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

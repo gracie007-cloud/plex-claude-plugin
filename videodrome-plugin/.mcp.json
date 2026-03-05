@@ -1,0 +1,25 @@
+{
+  "videodrome": {
+    "command": "uv",
+    "args": [
+      "run",
+      "--directory",
+      "/Users/nick/git/videodrome-plugin",
+      "--env-file",
+      "/Users/nick/.config/videodrome-mcp/.env",
+      "videodrome"
+    ],
+    "env": {
+      "VIDEODROME_PLEX_URL": "",
+      "VIDEODROME_PLEX_TOKEN": "",
+      "VIDEODROME_TMDB_API_KEY": "",
+      "VIDEODROME_MEDIA_ROOT": "",
+      "VIDEODROME_INGEST_DIR": "",
+      "VIDEODROME_AUTO_INGEST": "false",
+      "VIDEODROME_CONFIDENCE_THRESHOLD": "0.85",
+      "TRANSMISSION_URL": "",
+      "TRANSMISSION_USER": "",
+      "TRANSMISSION_PASSWORD": ""
+    }
+  }
+}
